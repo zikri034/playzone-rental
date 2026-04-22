@@ -1,16 +1,16 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { addHours, isAfter } from "date-fns";
 import { toast } from "sonner";
+import { supabase } from "../../utils/supabase/client"; // 🔥 Sesuaikan path ini jika error
 
 export interface Booking {
   id: string;
   unitId: string;
   customerName: string;
-  startTime: Date;
+  startTime: string; // ISO string dari database
   durationHours: number;
   totalCost: number;
   status: "active" | "completed" | "cancelled";
-  paymentMethod?: "credit-card" | "debit-card" | "qr-payment" | "cash" | "e-wallet";
 }
 
 export interface Unit {
@@ -19,91 +19,107 @@ export interface Unit {
   type: "PS5" | "PS4 Pro" | "PS5 Digital";
   pricePerHour: number;
   status: "available" | "rented" | "maintenance";
-  currentBookingId?: string;
 }
 
 interface RentalContextType {
   units: Unit[];
   bookings: Booking[];
-  addBooking: (booking: Omit<Booking, "id" | "status">) => void;
-  endBooking: (id: string) => void;
+  loading: boolean;
+  addBooking: (booking: Omit<Booking, "id" | "status">) => Promise<void>;
+  endBooking: (id: string) => Promise<void>;
   getUnitStatus: (id: string) => Unit["status"];
+  refreshData: () => Promise<void>;
 }
 
 const RentalContext = createContext<RentalContextType | undefined>(undefined);
 
-const INITIAL_UNITS: Unit[] = [
-  { id: "1", name: "Console 01", type: "PS5", pricePerHour: 15, status: "available" },
-  { id: "2", name: "Console 02", type: "PS5", pricePerHour: 15, status: "available" },
-  { id: "3", name: "Console 03", type: "PS5 Digital", pricePerHour: 12, status: "available" },
-  { id: "4", name: "Console 04", type: "PS4 Pro", pricePerHour: 8, status: "available" },
-  { id: "5", name: "Console 05", type: "PS5", pricePerHour: 15, status: "maintenance" },
-];
-
 export function RentalProvider({ children }: { children: React.ReactNode }) {
-  const [units, setUnits] = useState<Unit[]>(INITIAL_UNITS);
+  const [units, setUnits] = useState<Unit[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  // Simulate real-time check for notifications and ending bookings
+  // 🔥 Ambil data dari Supabase saat pertama kali Load
   useEffect(() => {
-    const interval = setInterval(() => {
-      const now = new Date();
-      
-      bookings.forEach(booking => {
-        if (booking.status === "active") {
-          const endTime = addHours(new Date(booking.startTime), booking.durationHours);
-          const diffInMinutes = (endTime.getTime() - now.getTime()) / (1000 * 60);
+    refreshData();
+  }, []);
 
-          // Notification: 10 mins before end
-          if (diffInMinutes > 0 && diffInMinutes <= 10 && diffInMinutes > 9.5) {
-            toast.warning(`Rental for ${booking.customerName} ending in 10 minutes!`);
-          }
+  const refreshData = async () => {
+    setLoading(true);
+    try {
+      // Ambil Unit
+      const { data: unitsData } = await supabase.from('units').select('*').order('id', { ascending: true });
+      // Ambil Booking (Admin bisa lihat semua karena tidak ada filter .eq('userId'))
+      const { data: bookingsData } = await supabase.from('bookings').select('*').order('created_at', { ascending: false });
 
-          // Auto-end if time passed (for demo purposes)
-          if (isAfter(now, endTime)) {
-            endBooking(booking.id);
-            toast.info(`Rental for ${booking.customerName} has completed.`);
-          }
-        }
-      });
-    }, 30000); // Check every 30s
-
-    return () => clearInterval(interval);
-  }, [bookings]);
-
-  const addBooking = (bookingData: Omit<Booking, "id" | "status">) => {
-    const newBooking: Booking = {
-      ...bookingData,
-      id: Math.random().toString(36).substr(2, 9),
-      status: "active",
-      startTime: new Date(), // Using current time for demo
-    };
-
-    setBookings(prev => [...prev, newBooking]);
-    setUnits(prev =>
-      prev.map(u =>
-        u.id === bookingData.unitId
-          ? { ...u, status: "rented", currentBookingId: newBooking.id }
-          : u
-      )
-    );
-    toast.success("Reservation confirmed!");
+      if (unitsData) setUnits(unitsData as any);
+      if (bookingsData) {
+        const formattedBookings = bookingsData.map(b => ({
+          id: b.id,
+          unitId: b.unit_id,
+          customerName: b.customer_name,
+          startTime: b.start_time,
+          durationHours: b.duration,
+          totalCost: b.total_cost,
+          status: b.status
+        }));
+        setBookings(formattedBookings as any);
+      }
+    } catch (error) {
+      console.error("Fetch error:", error);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const endBooking = (id: string) => {
-    const booking = bookings.find(b => b.id === id);
-    if (!booking) return;
+  // 🔥 Tambah Booking ke Supabase
+  const addBooking = async (bookingData: Omit<Booking, "id" | "status">) => {
+    try {
+      const { data, error } = await supabase
+        .from('bookings')
+        .insert([{
+          unit_id: bookingData.unitId,
+          customer_name: bookingData.customerName,
+          duration: bookingData.durationHours,
+          total_cost: bookingData.totalCost,
+          status: 'active',
+          start_time: new Date().toISOString()
+        }])
+        .select();
 
-    setBookings(prev =>
-      prev.map(b => (b.id === id ? { ...b, status: "completed" } : b))
-    );
-    setUnits(prev =>
-      prev.map(u =>
-        u.id === booking.unitId
-          ? { ...u, status: "available", currentBookingId: undefined }
-          : u
-      )
-    );
+      if (error) throw error;
+
+      // Update status unit menjadi 'rented'
+      await supabase.from('units').update({ status: 'rented' }).eq('id', bookingData.unitId);
+      
+      await refreshData();
+      toast.success("Reservasi berhasil disimpan ke Database!");
+    } catch (error) {
+      toast.error("Gagal menyimpan reservasi");
+      console.error(error);
+    }
+  };
+
+  // 🔥 Selesaikan Booking di Supabase
+  const endBooking = async (id: string) => {
+    try {
+      const booking = bookings.find(b => b.id === id);
+      if (!booking) return;
+
+      const { error } = await supabase
+        .from('bookings')
+        .update({ status: 'completed' })
+        .eq('id', id);
+
+      if (error) throw error;
+
+      // Balikkan status unit menjadi 'available'
+      await supabase.from('units').update({ status: 'available' }).eq('id', booking.unitId);
+
+      await refreshData();
+      toast.info(`Rental ${booking.customerName} telah selesai.`);
+    } catch (error) {
+      console.error(error);
+    }
   };
 
   const getUnitStatus = (id: string) => {
@@ -111,7 +127,7 @@ export function RentalProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <RentalContext.Provider value={{ units, bookings, addBooking, endBooking, getUnitStatus }}>
+    <RentalContext.Provider value={{ units, bookings, loading, addBooking, endBooking, getUnitStatus, refreshData }}>
       {children}
     </RentalContext.Provider>
   );
