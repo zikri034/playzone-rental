@@ -2,7 +2,6 @@ import React, { createContext, useContext, useState, useEffect } from "react";
 import { supabase } from "../../utils/supabase/client";
 import type { User } from "@supabase/supabase-js";
 
-// --- INTERFACES (Tetap sama) ---
 interface UserProfile {
   userId: string;
   name: string;
@@ -47,33 +46,49 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Jika fungsi-fungsi di bawah ini (fetchProfile/settings) juga Error CORS nanti, 
-  // kita akan ubah ke query tabel manual. Untuk sekarang kita fokus di Sign Up.
-  const API_BASE = `https://apxorxfvzmhwwyesxbhd.supabase.co/functions/v1/make-server-c7f52ad3`;
-
-  const fetchProfile = async (token: string) => {
+  // 🔥 Menggunakan Supabase Client langsung, bukan Edge Function
+  const fetchProfile = async (userId: string) => {
     try {
-      const response = await fetch(`${API_BASE}/profile`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (response.ok) {
-        const data = await response.json();
-        setProfile(data);
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('user_id', userId)
+        .single();
+
+      if (data) {
+        setProfile({
+          userId: data.user_id,
+          name: data.name,
+          email: data.email,
+          avatar: data.avatar,
+          membershipTier: data.membership_tier,
+          membershipStatus: data.membership_status,
+          createdAt: data.created_at,
+        });
       }
     } catch (error) {
       console.error("Failed to fetch profile:", error);
     }
   };
 
-  const fetchSettings = async (token: string) => {
+  const fetchSettings = async (userId: string) => {
     try {
-      const response = await fetch(`${API_BASE}/settings`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (response.ok) {
-        const data = await response.json();
-        setSettings(data);
-        if (data.darkMode) document.documentElement.classList.add("dark");
+      const { data, error } = await supabase
+        .from('settings')
+        .select('*')
+        .eq('user_id', userId)
+        .single();
+
+      if (data) {
+        setSettings({
+          userId: data.user_id,
+          darkMode: data.dark_mode,
+          notificationsEnabled: data.notifications_enabled,
+          emailNotifications: data.email_notifications,
+          pushNotifications: data.push_notifications,
+          rentalReminders: data.rental_reminders,
+        });
+        if (data.dark_mode) document.documentElement.classList.add("dark");
       }
     } catch (error) {
       console.error("Failed to fetch settings:", error);
@@ -87,8 +102,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (session?.user) {
           setUser(session.user);
           setAccessToken(session.access_token);
-          await fetchProfile(session.access_token);
-          await fetchSettings(session.access_token);
+          await fetchProfile(session.user.id);
+          await fetchSettings(session.user.id);
         }
       } catch (error) {
         console.error("Auth initialization error:", error);
@@ -103,8 +118,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (session?.user) {
           setUser(session.user);
           setAccessToken(session.access_token);
-          await fetchProfile(session.access_token);
-          await fetchSettings(session.access_token);
+          await fetchProfile(session.user.id);
+          await fetchSettings(session.user.id);
         } else {
           setUser(null);
           setProfile(null);
@@ -116,24 +131,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => subscription.unsubscribe();
   }, []);
 
-  // 🔥 PERBAIKAN FUNGSI SIGN UP
   const signUp = async (email: string, password: string, name: string) => {
     try {
-      // Kita gunakan SDK resmi Supabase, bukan fetch manual ke Edge Function
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
-        options: {
-          data: {
-            name: name, // Menyimpan nama ke metadata user
-          },
-        },
+        options: { data: { name: name } },
       });
 
       if (error) throw error;
 
+      // 🔥 Otomatis buat data Profile dan Settings saat Sign Up
       if (data.user) {
-        // Jika berhasil, otomatis login
+        await supabase.from('profiles').insert([{ 
+          user_id: data.user.id, 
+          name: name, 
+          email: email 
+        }]);
+        await supabase.from('settings').insert([{ 
+          user_id: data.user.id 
+        }]);
+        
         await signIn(email, password);
       }
     } catch (error) {
@@ -154,8 +172,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (data.session) {
         setUser(data.user);
         setAccessToken(data.session.access_token);
-        await fetchProfile(data.session.access_token);
-        await fetchSettings(data.session.access_token);
+        await fetchProfile(data.user.id);
+        await fetchSettings(data.user.id);
       }
     } catch (error) {
       console.error("Sign in error:", error);
@@ -178,19 +196,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const updateProfile = async (updates: Partial<UserProfile>) => {
-    if (!accessToken) throw new Error("Not authenticated");
+    if (!user) throw new Error("Not authenticated");
     try {
-      const response = await fetch(`${API_BASE}/profile`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify(updates),
-      });
-      if (!response.ok) throw new Error("Failed to update profile");
-      const updatedProfile = await response.json();
-      setProfile(updatedProfile);
+      // Mapping ke format database
+      const dbUpdates: any = {};
+      if (updates.name) dbUpdates.name = updates.name;
+      if (updates.avatar) dbUpdates.avatar = updates.avatar;
+
+      const { error } = await supabase
+        .from('profiles')
+        .update(dbUpdates)
+        .eq('user_id', user.id);
+
+      if (error) throw error;
+      await fetchProfile(user.id);
     } catch (error) {
       console.error("Update profile error:", error);
       throw error;
@@ -198,24 +217,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const updateSettings = async (updates: Partial<UserSettings>) => {
-    if (!accessToken) throw new Error("Not authenticated");
+    if (!user) throw new Error("Not authenticated");
     try {
-      const response = await fetch(`${API_BASE}/settings`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify(updates),
-      });
-      if (!response.ok) throw new Error("Failed to update settings");
-      const updatedSettings = await response.json();
-      setSettings(updatedSettings);
-      if (updatedSettings.darkMode) {
-        document.documentElement.classList.add("dark");
-      } else {
-        document.documentElement.classList.remove("dark");
-      }
+      const dbUpdates: any = {};
+      if (updates.darkMode !== undefined) dbUpdates.dark_mode = updates.darkMode;
+      if (updates.notificationsEnabled !== undefined) dbUpdates.notifications_enabled = updates.notificationsEnabled;
+      
+      const { error } = await supabase
+        .from('settings')
+        .update(dbUpdates)
+        .eq('user_id', user.id);
+
+      if (error) throw error;
+      await fetchSettings(user.id);
     } catch (error) {
       console.error("Update settings error:", error);
       throw error;
@@ -223,19 +237,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const upgradeMembership = async (tier: "free" | "premium" | "vip") => {
-    if (!accessToken) throw new Error("Not authenticated");
+    if (!user) throw new Error("Not authenticated");
     try {
-      const response = await fetch(`${API_BASE}/membership/upgrade`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({ tier }),
-      });
-      if (!response.ok) throw new Error("Failed to upgrade membership");
-      const updatedProfile = await response.json();
-      setProfile(updatedProfile);
+      const { error } = await supabase
+        .from('profiles')
+        .update({ membership_tier: tier })
+        .eq('user_id', user.id);
+
+      if (error) throw error;
+      await fetchProfile(user.id);
     } catch (error) {
       console.error("Upgrade membership error:", error);
       throw error;
@@ -243,29 +253,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const refreshProfile = async () => {
-    if (accessToken) await fetchProfile(accessToken);
+    if (user) await fetchProfile(user.id);
   };
 
   const refreshSettings = async () => {
-    if (accessToken) await fetchSettings(accessToken);
+    if (user) await fetchSettings(user.id);
   };
 
   return (
     <AuthContext.Provider
       value={{
-        user,
-        profile,
-        settings,
-        accessToken,
-        loading,
-        signUp,
-        signIn,
-        signOut,
-        updateProfile,
-        updateSettings,
-        upgradeMembership,
-        refreshProfile,
-        refreshSettings,
+        user, profile, settings, accessToken, loading,
+        signUp, signIn, signOut, updateProfile, updateSettings,
+        upgradeMembership, refreshProfile, refreshSettings,
       }}
     >
       {children}
