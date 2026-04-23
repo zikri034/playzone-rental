@@ -1,15 +1,16 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { toast } from "sonner";
-import { supabase } from "../../utils/supabase/client"; // Pastikan path ini benar
+import { supabase } from "../../utils/supabase/client";
 
 export interface Booking {
   id: string;
   unitId: string;
   customerName: string;
-  startTime: string; 
+  startTime: string;
   durationHours: number;
   totalCost: number;
   status: "active" | "completed" | "cancelled";
+  paymentMethod?: string;
 }
 
 export interface Unit {
@@ -46,37 +47,37 @@ export function RentalProvider({ children }: { children: React.ReactNode }) {
     try {
       // 1. Ambil data Unit
       const { data: unitsData } = await supabase
-        .from('units')
-        .select('*')
-        .order('id', { ascending: true });
-      
+        .from("units")
+        .select("*")
+        .order("id", { ascending: true });
+
       // 2. Ambil data Booking
       const { data: bookingsData } = await supabase
-        .from('bookings')
-        .select('*')
-        .order('created_at', { ascending: false });
+        .from("bookings")
+        .select("*")
+        .order("created_at", { ascending: false });
 
-      // 🔥 MAPPING: Terjemahkan snake_case database ke camelCase React
       if (unitsData) {
-        const formattedUnits = unitsData.map(u => ({
+        const formattedUnits = unitsData.map((u) => ({
           id: u.id,
           name: u.name,
           type: u.type,
-          pricePerHour: u.price_per_hour, // Mapping price_per_hour -> pricePerHour
-          status: u.status
+          pricePerHour: u.price_per_hour,
+          status: u.status,
         }));
         setUnits(formattedUnits as any);
       }
 
       if (bookingsData) {
-        const formattedBookings = bookingsData.map(b => ({
+        const formattedBookings = bookingsData.map((b) => ({
           id: b.id,
-          unitId: b.unit_id,      // Mapping unit_id -> unitId
+          unitId: b.unit_id,
           customerName: b.customer_name,
           startTime: b.start_time,
           durationHours: b.duration,
           totalCost: b.total_cost,
-          status: b.status
+          status: b.status,
+          paymentMethod: b.payment_method,
         }));
         setBookings(formattedBookings as any);
       }
@@ -89,25 +90,26 @@ export function RentalProvider({ children }: { children: React.ReactNode }) {
 
   const addBooking = async (bookingData: Omit<Booking, "id" | "status">) => {
     try {
-      const { error } = await supabase
-        .from('bookings')
-        .insert([{
+      const { error } = await supabase.from("bookings").insert([
+        {
           unit_id: bookingData.unitId,
           customer_name: bookingData.customerName,
           duration: bookingData.durationHours,
           total_cost: bookingData.totalCost,
-          status: 'active',
-          start_time: new Date().toISOString()
-        }]);
+          status: "active",
+          start_time: bookingData.startTime, // Menggunakan string ISO dari Reserve.tsx
+          payment_method: bookingData.paymentMethod, // 🔥 Sekarang data pembayaran tersimpan!
+        },
+      ]);
 
       if (error) throw error;
 
       // Update status unit menjadi 'rented'
       await supabase
-        .from('units')
-        .update({ status: 'rented' })
-        .eq('id', bookingData.unitId);
-      
+        .from("units")
+        .update({ status: "rented" })
+        .eq("id", bookingData.unitId);
+
       await refreshData();
       toast.success("Reservasi berhasil disimpan!");
     } catch (error) {
@@ -118,21 +120,21 @@ export function RentalProvider({ children }: { children: React.ReactNode }) {
 
   const endBooking = async (id: string) => {
     try {
-      const booking = bookings.find(b => b.id === id);
+      const booking = bookings.find((b) => b.id === id);
       if (!booking) return;
 
       const { error } = await supabase
-        .from('bookings')
-        .update({ status: 'completed' })
-        .eq('id', id);
+        .from("bookings")
+        .update({ status: "completed" })
+        .eq("id", id);
 
       if (error) throw error;
 
       // Balikkan status unit menjadi 'available'
       await supabase
-        .from('units')
-        .update({ status: 'available' })
-        .eq('id', booking.unitId);
+        .from("units")
+        .update({ status: "available" })
+        .eq("id", booking.unitId);
 
       await refreshData();
       toast.info(`Rental telah selesai.`);
@@ -142,11 +144,13 @@ export function RentalProvider({ children }: { children: React.ReactNode }) {
   };
 
   const getUnitStatus = (id: string) => {
-    return units.find(u => u.id === id)?.status || "available";
+    return units.find((u) => u.id === id)?.status || "available";
   };
 
   return (
-    <RentalContext.Provider value={{ units, bookings, loading, addBooking, endBooking, getUnitStatus, refreshData }}>
+    <RentalContext.Provider
+      value={{ units, bookings, loading, addBooking, endBooking, getUnitStatus, refreshData }}
+    >
       {children}
     </RentalContext.Provider>
   );
