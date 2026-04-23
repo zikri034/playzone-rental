@@ -53,7 +53,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .from('profiles')
         .select('*')
         .eq('user_id', userId)
-        .single();
+        .maybeSingle();
 
       if (data) {
         setProfile({
@@ -77,7 +77,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .from('settings')
         .select('*')
         .eq('user_id', userId)
-        .single();
+        .maybeSingle();
 
       if (data) {
         setSettings({
