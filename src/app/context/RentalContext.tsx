@@ -11,6 +11,7 @@ export interface Booking {
   totalCost: number;
   status: "active" | "completed" | "cancelled";
   paymentMethod?: string;
+  phoneNumber?: string; // 🔥 Tambahan: Field No. HP
 }
 
 export interface Unit {
@@ -78,6 +79,7 @@ export function RentalProvider({ children }: { children: React.ReactNode }) {
           totalCost: b.total_cost,
           status: b.status,
           paymentMethod: b.payment_method,
+          phoneNumber: b.phone_number, // 🔥 Tambahan: Mapping dari database ke React
         }));
         setBookings(formattedBookings as any);
       }
@@ -97,8 +99,9 @@ export function RentalProvider({ children }: { children: React.ReactNode }) {
           duration: bookingData.durationHours,
           total_cost: bookingData.totalCost,
           status: "active",
-          start_time: bookingData.startTime, // Menggunakan string ISO dari Reserve.tsx
-          payment_method: bookingData.paymentMethod, // 🔥 Sekarang data pembayaran tersimpan!
+          start_time: bookingData.startTime, 
+          payment_method: bookingData.paymentMethod, 
+          phone_number: bookingData.phoneNumber, // 🔥 Tambahan: Insert ke Supabase
         },
       ]);
 
